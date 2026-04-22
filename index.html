@@ -1,130 +1,36 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <title>オセロ</title>
-
-    <!-- ✅ PeerJS 正しいCDN -->
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-
-    <style>
-        body { display: flex; flex-direction: column; align-items: center; background-color: #2c3e50; color: white; font-family: sans-serif; }
-        #board { display: grid; grid-template-columns: repeat(8, 50px); grid-template-rows: repeat(8, 50px); gap: 2px; background-color: #34495e; border: 5px solid #34495e; }
-        .cell { width: 50px; height: 50px; background-color: #27ae60; display: flex; justify-content: center; align-items: center; cursor: pointer; }
-        .stone { width: 40px; height: 40px; border-radius: 50%; display: none; }
-        .black { display: block; background-color: #000; }
-        .white { display: block; background-color: #fff; }
-        .guide { width: 12px; height: 12px; border-radius: 50%; }
-        .guide-black { background-color: rgba(0, 0, 0, 0.3); }
-        .guide-white { background-color: rgba(255, 255, 255, 0.6); }
-    </style>
+<meta charset="UTF-8">
+<title>ゲーム選択</title>
+<style>
+body {
+    font-family: sans-serif;
+    text-align: center;
+    background: #2c3e50;
+    color: white;
+}
+a {
+    display: block;
+    margin: 20px auto;
+    padding: 15px;
+    width: 200px;
+    background: #3498db;
+    color: white;
+    text-decoration: none;
+    border-radius: 10px;
+}
+a:hover {
+    background: #2980b9;
+}
+</style>
 </head>
 <body>
 
-<h1>オセロ</h1>
-<div id="status">接続準備中...</div>
-<div id="share"></div>
-<div id="board"></div>
+<h1>ゲームを選択</h1>
 
-<script>
-const peer = new Peer();
-let conn = null;
-let myColor = null;
-let board = Array(8).fill().map(()=>Array(8).fill(null));
-let turn = 'black';
-
-// 初期配置
-board[3][3]='white'; board[3][4]='black';
-board[4][3]='black'; board[4][4]='white';
-
-peer.on('open', id=>{
-    const urlParams = new URLSearchParams(location.search);
-    const hostId = urlParams.get('id');
-
-    if(hostId){
-        myColor='white';
-        conn = peer.connect(hostId);
-        setup();
-    }else{
-        myColor='black';
-        document.getElementById('share').innerHTML =
-            `このURLを共有:<br>${location.href}?id=${id}`;
-    }
-});
-
-peer.on('connection', c=>{
-    conn=c;
-    setup();
-});
-
-function setup(){
-    conn.on('open', ()=>{
-        document.getElementById('status').textContent =
-            `接続完了（${myColor}）`;
-        draw();
-    });
-
-    conn.on('data', data=>{
-        board=data.board;
-        turn=data.turn;
-        draw();
-    });
-}
-
-function draw(){
-    const el=document.getElementById('board');
-    el.innerHTML='';
-
-    for(let r=0;r<8;r++){
-        for(let c=0;c<8;c++){
-            const cell=document.createElement('div');
-            cell.className='cell';
-
-            if(board[r][c]){
-                const s=document.createElement('div');
-                s.className='stone '+board[r][c];
-                cell.appendChild(s);
-            }else if(turn===myColor){
-                const flips=getFlips(r,c,turn);
-                if(flips.length){
-                    const g=document.createElement('div');
-                    g.className='guide guide-'+turn;
-                    cell.appendChild(g);
-
-                    cell.onclick=()=>{
-                        board[r][c]=turn;
-                        flips.forEach(([fr,fc])=>board[fr][fc]=turn);
-                        turn = turn==='black'?'white':'black';
-                        draw();
-                        conn && conn.send({board,turn});
-                    };
-                }
-            }
-
-            el.appendChild(cell);
-        }
-    }
-}
-
-function getFlips(r,c,color){
-    const dirs=[[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
-    const opp=color==='black'?'white':'black';
-    let res=[];
-
-    dirs.forEach(([dr,dc])=>{
-        let tmp=[];
-        let x=r+dr,y=c+dc;
-
-        while(x>=0&&x<8&&y>=0&&y<8){
-            if(board[x][y]===opp) tmp.push([x,y]);
-            else if(board[x][y]===color){ res=res.concat(tmp); break; }
-            else break;
-            x+=dr; y+=dc;
-        }
-    });
-    return res;
-}
-</script>
+<a href="othello.html">オセロ</a>
+<a href="shogi.html">将棋</a>
 
 </body>
 </html>
