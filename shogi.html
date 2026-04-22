@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>将棋</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root { --cell-size: 50px; }
+        body { display: flex; flex-direction: column; align-items: center; background-color: #2c3e50; color: white; font-family: 'Meiryo', sans-serif; }
+        #board { display: grid; grid-template-columns: repeat(9, var(--cell-size)); grid-template-rows: repeat(9, var(--cell-size)); gap: 1px; background-color: #333; border: 4px solid #5d4037; }
+        .cell { width: var(--cell-size); height: var(--cell-size); background-color: #f1c40f; display: flex; justify-content: center; align-items: center; cursor: pointer; border: 1px solid #d4ac0d; position: relative; }
+        .piece { font-size: 28px; color: #000; font-weight: bold; cursor: pointer; user-select: none; }
+        .white-side { transform: rotate(180deg); color: #e67e22; }
+        .selected { background-color: #ffeb3b !important; }
+        .movable { background-color: rgba(255, 255, 255, 0.4) !important; }
+        #hand-area { margin: 10px; width: 460px; padding: 10px; background: #34495e; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 5px; }
+        .hand-piece { font-size: 24px; padding: 5px; background: #f39c12; border-radius: 4px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<h1>将棋</h1>
+<div id="status">Peer接続中...</div>
+<div id="share"></div>
+
+<div id="hand-white" id="hand-area"></div>
+<div id="board"></div>
+<div id="hand-black" id="hand-area"></div>
+
+<script>
+const peer = new Peer();
+let conn = null;
+let myColor = null;
+let turn = 'black';
+let selected = null; // {r, c, type: 'board'|'hand'}
+let board = Array(9).fill().map(() => Array(9).fill(null));
+let hands = { black: [], white: [] };
+
+// 駒の動き定義
+const MOVES = {
+    '歩': [[-1, 0]], '香': 'range-fwd', '桂': [[-2, -1], [-2, 1]], 
+    '銀': [[-1, -1], [-1, 0], [-1, 1], [1, -1], [1, 1]],
+    '金': [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, 0]],
+    '角': 'range-diag', '飛': 'range-cross', '玉': [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]],
+    'と': 'gold', '成香': 'gold', '成桂': 'gold', '成銀': 'gold', '馬': 'dragon-diag', '龍': 'dragon-cross'
+};
+
+const PROMOTION_MAP = { '歩':'と', '香':'成香', '桂':'成桂', '銀':'成銀', '角':'馬', '飛':'龍' };
+
+// 初期配置
+function init() {
+    const layout = ['香','桂','銀','金','玉','金','銀','桂','香'];
+    for(let i=0; i<9; i++) {
+        board[0][i] = {type: layout[i], side: 'white'};
+        board[1][1] = {type: '角', side: 'white'}; board[1][7] = {type: '飛', side: 'white'};
+        board[2][i] = {type: '歩', side: 'white'};
+        board[8][i] = {type: layout[8-i], side: 'black'};
+        board[7][1] = {type: '飛', side: 'black'}; board[7][7] = {type: '角', side: 'black'};
+        board[6][i] = {type: '歩', side: 'black'};
+    }
+}
+init();
+
+// PeerJS 接続処理
+peer.on('open', id => {
+    const hostId = new URLSearchParams(location.search).get('id');
+    if(hostId) { myColor='white'; conn = peer.connect(hostId); setup(); }
+    else { myColor='black'; document.getElementById('share').innerHTML = `招待URL: ${location.href}?id=${id}`; }
+});
+peer.on('connection', c => { conn = c; setup(); });
+
+function setup() {
+    conn.on('open', () => { document.getElementById('status').textContent = `対局中: ${myColor==='black'?'先手':'後手'}`; draw(); });
+    conn.on('data', data => { board=data.board; hands=data.hands; turn=data.turn; draw(); });
+}
+
+// 移動可能範囲の計算
+function getValidMoves(r, c, piece) {
+    let valid = [];
+    const side = piece.side;
+    const moveData = MOVES[piece.type] === 'gold' ? MOVES['金'] : MOVES[piece.type];
+    
+    const check = (dr, dc) => {
+        const nr = r + (side === 'black' ? dr : -dr);
+        const nc = c + (side === 'black' ? dc : -dc);
+        if (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
+            if (!board[nr][nc] || board[nr][nc].side !== side) valid.push([nr, nc]);
+            return !board[nr][nc]; // 空きならさらに進める(飛車など用)
+        }
+        return false;
+    };
+
+    if (Array.isArray(moveData)) {
+        moveData.forEach(([dr, dc]) => check(dr, dc));
+    } else {
+        // 飛車・角・香などのスライド移動
+        const dirs = moveData.includes('cross') ? [[1,0],[-1,0],[0,1],[0,-1]] : 
+                     moveData.includes('diag') ? [[1,1],[1,-1],[-1,1],[-1,-1]] : [[-1,0]];
+        dirs.forEach(([dr, dc]) => {
+            for(let i=1; i<9; i++) if(!check(dr*i, dc*i)) break;
+        });
+        // 龍・馬の隣接移動追加
+        if(moveData.startsWith('dragon')) {
+            const extra = moveData.includes('cross') ? [[1,1],[1,-1],[-1,1],[-1,-1]] : [[1,0],[-1,0],[0,1],[0,-1]];
+            extra.forEach(([dr, dc]) => check(dr, dc));
+        }
+    }
+    return valid;
+}
+
+function handleCellClick(r, c) {
+    if(turn !== myColor) return;
+    const target = board[r][c];
+
+    if (selected && selected.type === 'hand') {
+        if(!target) { // 持ち駒を打つ
+            board[r][c] = { type: selected.piece, side: myColor };
+            hands[myColor].splice(selected.index, 1);
+            endTurn();
+        }
+        selected = null;
+    } else if (selected) {
+        const moves = getValidMoves(selected.r, selected.c, board[selected.r][selected.c]);
+        if (moves.some(([vr, vc]) => vr === r && vc === c)) {
+            // 移動実行
+            const movingPiece = board[selected.r][selected.c];
+            if(target) hands[myColor].push(target.type.replace(/成|と|馬|龍/, (m)=>m==='馬'?'角':m==='龍'?'飛':''));
+            
+            // 成り判定
+            if (PROMOTION_MAP[movingPiece.type] && 
+               ((myColor === 'black' && r < 3) || (myColor === 'white' && r > 5))) {
+                if(confirm("成りますか？")) movingPiece.type = PROMOTION_MAP[movingPiece.type];
+            }
+            
+            board[r][c] = movingPiece;
+            board[selected.r][selected.c] = null;
+            endTurn();
+        }
+        selected = null;
+    } else if (target && target.side === myColor) {
+        selected = { r, c, type: 'board' };
+    }
+    draw();
+}
+
+function endTurn() {
+    turn = turn === 'black' ? 'white' : 'black';
+    conn.send({ board, hands, turn });
+}
+
+function draw() {
+    const el = document.getElementById('board');
+    el.innerHTML = '';
+    const moves = (selected && selected.type === 'board') ? getValidMoves(selected.r, selected.c, board[selected.r][selected.c]) : [];
+
+    for(let r=0; r<9; r++) {
+        for(let c=0; c<9; c++) {
+            const cell = document.createElement('div');
+            cell.className = 'cell' + (moves.some(([vr,vc])=>vr===r&&vc===c)?' movable':'');
+            if(selected && selected.r === r && selected.c === c) cell.classList.add('selected');
+            
+            const p = board[r][c];
+            if(p) {
+                const div = document.createElement('div');
+                div.className = `piece ${p.side === 'white' ? 'white-side' : ''}`;
+                div.textContent = p.type;
+                cell.appendChild(div);
+            }
+            cell.onclick = () => handleCellClick(r, c);
+            el.appendChild(cell);
+        }
+    }
+    // 持ち駒描画
+    ['black', 'white'].forEach(side => {
+        const hEl = document.getElementById(`hand-${side}`);
+        hEl.innerHTML = (side==='black'?'先手: ':'後手: ');
+        hands[side].forEach((type, index) => {
+            const sp = document.createElement('span');
+            sp.className = 'hand-piece';
+            sp.textContent = type;
+            if(turn === myColor && side === myColor) sp.onclick = () => { selected = {type:'hand', piece:type, index}; draw(); };
+            hEl.appendChild(sp);
+        });
+    });
+}
+</script>
+</body>
+</html>
