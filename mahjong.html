@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>サンマ（安定版）</title>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+<style>
+body{
+    margin:0;
+    background:#0b3d2e;
+    color:white;
+    font-family:sans-serif;
+}
+#hand{
+    position:absolute;
+    bottom:20px;
+    left:50%;
+    transform:translateX(-50%);
+    display:flex;
+    gap:5px;
+}
+.tile{
+    width:40px;height:60px;
+    background:white;color:black;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    cursor:pointer;
+}
+#info{position:absolute;top:10px;left:10px;}
+</style>
+</head>
+
+<body>
+
+<div id="info"></div>
+<div id="hand"></div>
+
+<script>
+const peer = new Peer();
+let conn;
+let isHost=false;
+let myIndex=0;
+
+/* ===== ゲーム状態（ホストのみ操作） ===== */
+let game={
+    turn:0,
+    hands:[[],[],[]],
+    river:[[],[],[]],
+    wall:[]
+};
+
+/* ===== 山 ===== */
+function createWall(){
+    const tiles=[
+        ..."123456789".split("").map(n=>"p"+n),
+        ..."123456789".split("").map(n=>"s"+n),
+        ..."1234567".split("").map(n=>"z"+n),
+    ];
+    let wall=[];
+    tiles.forEach(t=>{
+        for(let i=0;i<4;i++) wall.push(t);
+    });
+    return wall.sort(()=>Math.random()-0.5);
+}
+
+/* ===== 初期化（ホストのみ） ===== */
+function startGame(){
+    game.wall=createWall();
+    for(let i=0;i<3;i++){
+        game.hands[i]=game.wall.splice(0,13);
+    }
+    startTurn(0);
+}
+
+/* ===== ターン処理（ホストのみ） ===== */
+function startTurn(p){
+    if(!isHost) return;
+
+    game.turn=p;
+
+    drawTile(p);
+
+    if(p===2){
+        setTimeout(cpuMove,500);
+    }else{
+        sendState();
+    }
+}
+
+/* ===== ツモ ===== */
+function drawTile(p){
+    if(game.wall.length===0) return;
+    game.hands[p].push(game.wall.pop());
+}
+
+/* ===== 捨て ===== */
+function discard(p,i){
+    const t=game.hands[p].splice(i,1)[0];
+    game.river[p].push(t);
+}
+
+/* ===== 次ターン ===== */
+function nextTurn(){
+    startTurn((game.turn+1)%3);
+}
+
+/* ===== CPU ===== */
+function cpuMove(){
+    if(!isHost) return;
+
+    let hand=game.hands[2];
+
+    let idx=Math.floor(Math.random()*hand.length);
+
+    discard(2,idx);
+
+    nextTurn();
+    sendState();
+}
+
+/* ===== クライアント → ホスト ===== */
+function sendAction(action){
+    if(conn) conn.send({type:"action",data:action});
+}
+
+/* ===== ホスト処理 ===== */
+function handleAction(action){
+    if(!isHost) return;
+
+    if(action.type==="discard"){
+        if(game.turn!==action.player) return;
+
+        discard(action.player,action.index);
+        nextTurn();
+        sendState();
+    }
+}
+
+/* ===== 状態送信 ===== */
+function sendState(){
+    if(conn) conn.send({type:"state",data:game});
+    draw();
+}
+
+/* ===== 描画 ===== */
+function draw(){
+    const h=document.getElementById("hand");
+    h.innerHTML="";
+
+    game.hands[myIndex].forEach((t,i)=>{
+        const d=document.createElement("div");
+        d.className="tile";
+        d.textContent=t;
+
+        d.onclick=()=>{
+            sendAction({
+                type:"discard",
+                player:myIndex,
+                index:i
+            });
+        };
+
+        h.appendChild(d);
+    });
+
+    document.getElementById("info").textContent=
+        "ターン:"+game.turn + (game.turn===2?" CPU":"");
+}
+
+/* ===== 通信 ===== */
+peer.on("open",id=>{
+    const host=new URLSearchParams(location.search).get("id");
+
+    if(host){
+        conn=peer.connect(host);
+        myIndex=1;
+        setup();
+    }else{
+        isHost=true;
+        myIndex=0;
+        document.getElementById("info").textContent="URL:?id="+id;
+    }
+});
+
+peer.on("connection",c=>{
+    conn=c;
+    setup();
+    startGame();
+});
+
+/* ===== 受信 ===== */
+function setup(){
+    conn.on("data",msg=>{
+        if(msg.type==="state"){
+            game=msg.data;
+            draw();
+        }
+        if(msg.type==="action"){
+            handleAction(msg.data);
+        }
+    });
+}
+</script>
+
+</body>
+</html>
