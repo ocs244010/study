@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>コリドール</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; display: flex; flex-direction: column; align-items: center; background: #eef2f3; margin: 0; padding: 20px; color: #333; }
+        h1 { margin-bottom: 5px; font-size: 24px; }
+        #info-panel { display: flex; gap: 40px; margin: 15px 0; font-size: 1.1rem; background: white; padding: 10px 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .player-info { display: flex; align-items: center; gap: 8px; font-weight: bold; }
+        .active-turn { color: #e74c3c; border-bottom: 3px solid #e74c3c; }
+        
+        /* 盤面レイアウト設定 */
+        #board-container { background: #8B5A2B; padding: 12px; border-radius: 8px; box-shadow: 0 8px 16px rgba(0,0,0,0.2); position: relative; }
+        #board { display: grid; position: relative; }
+        
+        /* マスと隙間（壁用）のサイズ定義 */
+        .square { background: #DEB887; border-radius: 4px; cursor: pointer; display: flex; justify-content: center; align-items: center; transition: background 0.2s; }
+        .square:hover { background: #D2B48C; }
+        .square.p1-token::after { content: "🔴"; font-size: 28px; }
+        .square.p2-token::after { content: "🔵"; font-size: 28px; }
+        
+        /* 壁を配置する溝の定義 */
+        .v-gap { cursor: pointer; transition: background 0.2s; }
+        .h-gap { cursor: pointer; transition: background 0.2s; }
+        .dot { background: transparent; }
+        
+        /* 壁が置かれた時のスタイル */
+        .wall-placed { background: #4a2e1b !important; border-radius: 2px; }
+        
+        /* 配置プレビュー（マウスホバー時） */
+        .wall-preview { background: rgba(74, 46, 27, 0.4) !important; }
+        
+        #message { margin-top: 15px; font-weight: bold; min-height: 24px; color: #c0392b; }
+        #reset-btn { margin-top: 10px; padding: 8px 16px; font-size: 1rem; cursor: pointer; background: #34495e; color: white; border: none; border-radius: 4px; transition: background 0.2s; }
+        #reset-btn:hover { background: #2c3e50; }
+    </style>
+</head>
+<body>
+
+    <h1>Quoridor (コリドール)</h1>
+    <div id="status">接続準備中...</div>
+    <div id="share"></div>
+    
+    <div id="info-panel">
+        <div id="p1-info" class="player-info active-turn">プレイヤー1 🔴 壁: <span id="p1-walls">10</span>枚</div>
+        <div id="p2-info" class="player-info">プレイヤー2 🔵 壁: <span id="p2-walls">10</span>枚</div>
+    </div>
+
+    <div id="board-container">
+        <div id="board"></div>
+    </div>
+
+    <div id="message"></div>
+    <button id="reset-btn" onclick="initGame()">ゲームをリセット</button>
+
+<script>
+    // -------------------------------------------------------------------------
+    // 1. 定数とグローバル状態の定義
+    // -------------------------------------------------------------------------
+    const SIZE = 9;         // マスの数 (9x9)
+    const CELL_W = 50;      // マスの幅 (px)
+    const GAP_W = 12;       // 壁を置く隙間の幅 (px)
+
+    const peer = new Peer();
+
+    let conn = null;
+    let myPlayer = null;
+
+    let turn = 1;           // 現在の手番 (1 または 2)
+    let p1Pos = {r: 8, c: 4}; // P1の初期位置（下側中央）
+    let p2Pos = {r: 0, c: 4}; // P2の初期位置（上側中央）
+    let p1Walls = 10;
+    let p2Walls = 10;
+
+    // 壁の状態管理（2次元配列。実在するグリッド座標に対応）
+    // 壁が設置されているマス/隙間座標を保持する
+    let placedWalls = new Set(); 
+
+    // -------------------------------------------------------------------------
+    // 2. 盤面の動的生成 (CSS Gridの組み立て)
+    // -------------------------------------------------------------------------
+    function setupGrid() {
+        const board = document.getElementById('board');
+        
+        // CSS Gridの行列幅を交互に設定 (50px, 12px, 50px, 12px...)
+        let template = "";
+        for(let i=0; i<SIZE; i++) {
+            template += `${CELL_W}px `;
+            if(i < SIZE - 1) template += `${GAP_W}px `;
+        }
+        board.style.gridTemplateColumns = template;
+        board.style.gridTemplateRows = template;
+
+        board.innerHTML = '';
+
+        // 全ての格子(マス、縦溝、横溝、交差点)をループ生成
+        // 偶数インデックスが「マス」、奇数が「隙間」に対応
+        const totalRows = SIZE * 2 - 1;
+        for (let r = 0; r < totalRows; r++) {
+            for (let c = 0; c < totalRows; c++) {
+                const el = document.createElement('div');
+                el.dataset.r = r;
+                el.dataset.c = c;
+
+                if (r % 2 === 0 && c % 2 === 0) {
+                    // マス (Square)
+                    el.classList.add('square');
+                    const cellR = r / 2;
+                    const cellC = c / 2;
+                    
+                    const currentPos =
+                        turn === 1 ? p1Pos : p2Pos;
+
+                    const opponentPos =
+                        turn === 1 ? p2Pos : p1Pos;
+
+                    const validMoves =
+                        getValidMoves(currentPos, opponentPos);
+
+                    if(
+                        validMoves.some(
+                            m => m.r === cellR &&
+                                m.c === cellC
+                        )
+                    ){
+                        el.style.boxShadow =
+                            "inset 0 0 0 4px #2ecc71";
+                    }
+
+                    // コマの描画
+                    if (cellR === p1Pos.r && cellC === p1Pos.c) el.classList.add('p1-token');
+                    if (cellR === p2Pos.r && cellC === p2Pos.c) el.classList.add('p2-token');
+                    
+                    el.addEventListener('click', () => handleSquareClick(cellR, cellC));
+                } 
+                else if (r % 2 === 0 && c % 2 === 1) {
+                    // 縦方向の隙間 (Vertical Gap)
+                    el.classList.add('v-gap');
+                    el.addEventListener('click', () => handleWallClick(r, c, 'V'));
+                    el.addEventListener('mouseenter', () => previewWall(r, c, 'V', true));
+                    el.addEventListener('mouseleave', () => previewWall(r, c, 'V', false));
+                } 
+                else if (r % 2 === 1 && c % 2 === 0) {
+                    // 横方向の隙間 (Horizontal Gap)
+                    el.classList.add('h-gap');
+                    el.addEventListener('click', () => handleWallClick(r, c, 'H'));
+                    el.addEventListener('mouseenter', () => previewWall(r, c, 'H', true));
+                    el.addEventListener('mouseleave', () => previewWall(r, c, 'H', false));
+                } 
+                else {
+                    // 交差点 (Dot)
+                    el.classList.add('dot');
+                }
+                board.appendChild(el);
+            }
+        }
+        updateUI();
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. コマの移動ロジック（飛び越し対応）
+    // -------------------------------------------------------------------------
+    // 指定したマスから移動可能な隣接マスを返す（壁の判定含む）
+    function getValidMoves(pos, opponentPos) {
+        const moves = [];
+        const directions = [
+            {dr: -1, dc: 0}, // 上
+            {dr: 1, dc: 0},  // 下
+            {dr: 0, dc: -1}, // 左
+            {dr: 0, dc: 1}   // 右
+        ];
+
+        directions.forEach(d => {
+            const nr = pos.r + d.dr;
+            const nc = pos.c + d.dc;
+            
+            // 盤面外チェック
+            if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) return;
+            
+            // コマの間の壁チェック
+            if (isWallBetween(pos.r, pos.c, nr, nc)) return;
+
+            // 相手のコマがいる場合の飛び越し処理
+            if (nr === opponentPos.r && nc === opponentPos.c) {
+                const jumpR = nr + d.dr;
+                const jumpC = nc + d.dc;
+
+                // 直進飛び越しが可能かチェック
+                if (jumpR >= 0 && jumpR < SIZE && jumpC >= 0 && jumpC < SIZE && !isWallBetween(nr, nc, jumpR, jumpC)) {
+                    moves.push({r: jumpR, c: jumpC});
+                } else {
+                    // 直進が壁か盤面外なら、左右斜めに回り込めるかチェック
+                    const diagonals = d.dr !== 0 ? [{dr:0, dc:-1}, {dr:0, dc:1}] : [{dr:-1, dc:0}, {dr:1, dc:0}];
+                    diagonals.forEach(diag => {
+                        const diagR = nr + diag.dr;
+                        const diagC = nc + diag.dc;
+                        if (diagR >= 0 && diagR < SIZE && diagC >= 0 && diagC < SIZE && !isWallBetween(nr, nc, diagR, diagC)) {
+                            moves.push({r: diagR, c: diagC});
+                        }
+                    });
+                }
+            } else {
+                moves.push({r: nr, c: nc});
+            }
+        });
+        return moves;
+    }
+
+    function getNeighbors(pos) {
+
+        const neighbors = [];
+
+        const dirs = [
+            {dr:-1, dc:0},
+            {dr:1, dc:0},
+            {dr:0, dc:-1},
+            {dr:0, dc:1}
+        ];
+
+        for(const d of dirs){
+
+            const nr = pos.r + d.dr;
+            const nc = pos.c + d.dc;
+
+            if(
+                nr >= 0 &&
+                nr < SIZE &&
+                nc >= 0 &&
+                nc < SIZE &&
+                !isWallBetween(pos.r, pos.c, nr, nc)
+            ){
+                neighbors.push({
+                    r:nr,
+                    c:nc
+                });
+            }
+        }
+
+        return neighbors;
+    }
+
+    // 2つのマス(r1,c1)と(r2,c2)の間に壁があるか判定
+    function isWallBetween(r1, c1, r2, c2) {
+        const gapR = r1 + r2; // 内部グリッド座標への変換
+        const gapC = c1 + c2;
+        return placedWalls.has(`${gapR},${gapC}`);
+    }
+
+    function handleSquareClick(r, c) {
+
+        if(turn !== myPlayer){
+            return;
+        }
+ 
+        const currentPos = turn === 1 ? p1Pos : p2Pos;
+        const opponentPos = turn === 1 ? p2Pos : p1Pos;
+        const validMoves = getValidMoves(currentPos, opponentPos);
+
+        // クリックされたマスが移動可能リストに含まれているか
+        const isTargetValid = validMoves.some(m => m.r === r && m.c === c);
+        
+        if (isTargetValid) {
+            if (turn === 1) p1Pos = {r, c};
+            else p2Pos = {r, c};
+
+            if (checkWin()) return;
+            switchTurn();
+        } else {
+            showError("そこには移動できません");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. 壁の配置ロジック & プレビュー
+    // -------------------------------------------------------------------------
+    // 壁を構成するグリッドの3パーツの座標を取得 (コリドールの壁はマス2個分の長さ)
+    function getWallCoords(r, c, type) {
+        if (type === 'V') {
+            return [`${r},${c}`, `${r+1},${c}`, `${r+2},${c}`];
+        } else {
+            return [`${r},${c}`, `${r},${c+1}`, `${r},${c+2}`];
+        }
+    }
+
+    // 壁の配置条件が適正かチェック
+    function canPlaceWall(r, c, type) {
+        const currentWalls = turn === 1 ? p1Walls : p2Walls;
+        if (currentWalls <= 0) return false;
+
+        const coords = getWallCoords(r, c, type);
+        
+        // 盤面をはみ出していないか
+        const maxCoord = SIZE * 2 - 1;
+        if (type === 'V' && r + 2 >= maxCoord) return false;
+        if (type === 'H' && c + 2 >= maxCoord) return false;
+
+        // 既存の壁と重なっていないか
+        for (let coord of coords) {
+            if (placedWalls.has(coord)) return false;
+        }
+        
+        // 交差点で壁が十字にクロスするのを防止
+        const centerCoord = type === 'V' ? `${r+1},${c}` : `${r},${c+1}`;
+        if (placedWalls.has(centerCoord)) return false;
+
+        // 十字交差を防ぐ
+
+        if(type === 'V'){
+
+            const center = `${r+1},${c}`;
+
+            const left = `${r+1},${c-1}`;
+            const right = `${r+1},${c+1}`;
+
+            if(
+                placedWalls.has(left) &&
+                placedWalls.has(center) &&
+                placedWalls.has(right)
+            ){
+                return false;
+            }
+
+        }else{
+
+            const center = `${r},${c+1}`;
+
+            const top = `${r-1},${c+1}`;
+            const bottom = `${r+1},${c+1}`;
+
+            if(
+                placedWalls.has(top) &&
+                placedWalls.has(center) &&
+                placedWalls.has(bottom)
+            ){
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    function handleWallClick(r, c, type) {
+
+        if(turn !== myPlayer){
+            return;
+        }
+
+        if (!canPlaceWall(r, c, type)) {
+            showError("そこには壁を置けません（枚数不足か重複）");
+            return;
+        }
+    
+        const coords = getWallCoords(r, c, type);
+
+        // 仮設置（ルート遮断判定のための一時登録
+        coords.forEach(coord => placedWalls.add(coord));
+        
+        // 【最重要】壁でゴールを完全に閉じ込めていないかチェック (BFSアルゴリズム)
+        if (!hasPathToGoal(p1Pos, 0) || !hasPathToGoal(p2Pos, 8)) {
+            // ルートが塞がれた場合は仮設置を解除してやり直し
+            coords.forEach(coord => placedWalls.delete(coord));
+            showError("全員のゴールへのルートを完全に塞ぐ壁は置けません！");
+            return;
+        }
+
+        // 壁の確定と枚数の減算
+        if (turn === 1) p1Walls--;
+        else p2Walls--;
+
+        switchTurn();
+    }
+
+    // マウスホバー時のプレビュー表示
+    function previewWall(r, c, type, isEnter) {
+        if (!canPlaceWall(r, c, type) && isEnter) return;
+        const coords = getWallCoords(r, c, type);
+        coords.forEach(coord => {
+            const [row, col] = coord.split(',');
+            const el = document.querySelector(`[data-r="${row}"][data-c="${col}"]`);
+            if (el && !el.classList.contains('wall-placed')) {
+                if (isEnter) el.classList.add('wall-preview');
+                else el.classList.remove('wall-preview');
+            }
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. ルート遮断判定 (幅優先探索: BFS)
+    // -------------------------------------------------------------------------
+    function hasPathToGoal(startPos, targetRow) {
+
+        const queue = [startPos];
+        let head = 0;
+
+        const visited = new Set([
+            `${startPos.r},${startPos.c}`
+        ]);
+
+        while(head < queue.length){
+
+            const curr = queue[head++];
+
+            if(curr.r === targetRow){
+                return true;
+            }
+
+            const neighbors = getNeighbors(curr);
+
+            for(const next of neighbors){
+
+                const key = `${next.r},${next.c}`;
+
+                if(!visited.has(key)){
+                    visited.add(key);
+                    queue.push(next);
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. ゲーム状態管理 & UI更新
+    // -------------------------------------------------------------------------
+    function switchTurn() {
+        turn = turn === 1 ? 2 : 1;
+        showError(""); // メッセージクリア
+        setupGrid();   // 盤面の再描画
+        sendState();
+    }
+
+    function updateUI() {
+        // 壁の残り枚数表示更新
+        document.getElementById('p1-walls').innerText = p1Walls;
+        document.getElementById('p2-walls').innerText = p2Walls;
+
+        // アクティブな手番のハイライト
+        document.getElementById('p1-info').classList.toggle('active-turn', turn === 1);
+        document.getElementById('p2-info').classList.toggle('active-turn', turn === 2);
+
+        // 設置済みの壁をクラス適用して着色
+        placedWalls.forEach(coord => {
+            const [row, col] = coord.split(',');
+            const el = document.querySelector(`[data-r="${row}"][data-c="${col}"]`);
+            if (el) el.classList.add('wall-placed');
+        });
+    }
+
+    function checkWin() {
+        if (p1Pos.r === 0) {
+            alert("プレイヤー1 (🔴) の勝利です！ 🎉");
+            initGame();
+            return true;
+        }
+        if (p2Pos.r === 8) {
+            alert("プレイヤー2 (🔵) の勝利です！ 🎉");
+            initGame();
+            return true;
+        }
+        return false;
+    }
+
+    function showError(msg) {
+        document.getElementById('message').innerText = msg;
+    }
+
+    function sendState(){
+
+        if(!conn) return;
+
+        conn.send({
+            turn,
+            p1Pos,
+            p2Pos,
+            p1Walls,
+            p2Walls,
+            placedWalls:[...placedWalls]
+        });
+    }
+
+    function setupConnection(){
+
+        conn.on('open',()=>{
+
+            document.getElementById('status').textContent =
+                `接続完了（プレイヤー${myPlayer}）`;
+
+            if(myPlayer === 1){
+                sendState();
+            }
+        });
+
+        conn.on('data',data=>{
+
+            turn = data.turn;
+
+            p1Pos = data.p1Pos;
+            p2Pos = data.p2Pos;
+
+            p1Walls = data.p1Walls;
+            p2Walls = data.p2Walls;
+
+            placedWalls = new Set(data.placedWalls);
+
+            setupGrid();
+        });
+
+        conn.on('close',()=>{
+
+            document.getElementById('status').textContent =
+                "接続が切れました";
+        });
+
+        conn.on('error',console.error);
+    }
+
+    function initGame() {
+        turn = 1;
+        p1Pos = {r: 8, c: 4};
+        p2Pos = {r: 0, c: 4};
+        p1Walls = 10;
+        p2Walls = 10;
+        placedWalls.clear();
+        showError("");
+        setupGrid();
+        sendState();
+    }
+
+    peer.on('open', id => {
+
+        const params = new URLSearchParams(location.search);
+        const hostId = params.get('id');
+
+        if(hostId){
+
+            myPlayer = 2;
+
+            conn = peer.connect(hostId);
+
+            setupConnection();
+
+        }else{
+
+            myPlayer = 1;
+
+            document.getElementById('share').innerHTML =
+                `このURLを共有<br>${location.href}?id=${id}`;
+        }
+    });
+
+    peer.on('connection', c => {
+
+        conn = c;
+
+        setupConnection();
+    });
+
+    // 起動時に初期化を実行
+    initGame();
+
+</script>
+
+</body>
+</html>
