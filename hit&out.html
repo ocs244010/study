@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ミニマルベースボールゲーム ヒット＆アウト</title>
+    <!-- Vue.js 3 の読込 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --accent-color: #e74c3c;
+            --success-color: #2ecc71;
+            --bg-color: #ecf0f1;
+        }
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+        #app {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+        }
+        h1 { font-size: 20px; color: var(--primary-color); margin-bottom: 15px; }
+        
+        /* スコアボード */
+        .scoreboard {
+            background: #34495e;
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+        .score-row { display: flex; justify-content: space-around; margin-bottom: 5px; }
+        .indicators { display: flex; justify-content: center; gap: 15px; font-size: 14px; }
+        .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: #7f8c8d; margin-left: 3px; }
+        .dot.out { background: var(--accent-color); }
+        .dot.runner { background: #f1c40f; }
+
+        /* 野球盤（ダイヤモンド） */
+        .field-container {
+            position: relative;
+            width: 300px;
+            height: 300px;
+            margin: 0 auto 20px;
+            background: #27ae60;
+            border-radius: 50%;
+            border: 4px solid #1e7e43;
+        }
+        .diamond-line {
+            position: absolute;
+            top: 50px; left: 50px; width: 190px; height: 190px;
+            border: 2px dashed rgba(255,255,255,0.4);
+            transform: rotate(45deg);
+        }
+
+        /* 各ベースボタン */
+        .base-btn {
+            position: absolute;
+            width: 55px;
+            height: 55px;
+            transform: translate(-50%, -50%);
+            background: white;
+            border: 3px solid #7f8c8d;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            z-index: 10;
+        }
+        .base-btn:hover:not(:disabled) { transform: translate(-50%, -50%) scale(1.05); background: #f8f9fa; }
+        .base-btn:disabled { cursor: not-allowed; }
+        
+        /* ベースの位置固定 */
+        .base-0 { top: 50%; left: 85%; }  /* 1塁 */
+        .base-1 { top: 15%; left: 50%; }  /* 2塁 */
+        .base-2 { top: 50%; left: 15%; }  /* 3塁 */
+        .base-3 { top: 85%; left: 50%; }  /* 本塁 */
+
+        /* ランナー表示用の装飾 */
+        .base-btn.has-runner { border-color: #f1c40f; box-shadow: 0 0 10px #f1c40f; }
+        
+        /* 開封後の状態スタイル */
+        .status-hit { background: var(--success-color) !important; color: white; border-color: #27ae60; }
+        .status-out { background: var(--accent-color) !important; color: white; border-color: #c0392b; }
+
+        /* ログ・メッセージ */
+        .message-box { min-height: 48px; font-weight: bold; color: var(--primary-color); margin-bottom: 15px; font-size: 16px; }
+        .btn-action { background: var(--primary-color); color: white; border: none; padding: 10px 20px; border-radius: 6px; font-size: 14px; cursor: pointer; }
+        .btn-action:disabled { background: #bdc3c7; }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <h1>⚾ ヒット＆アウト</h1>
+
+    <div id="status">接続待機中...</div>
+    <div id="share"></div>
+
+    <!-- スコアボード表示 -->
+    <div class="scoreboard">
+        <div class="score-row">
+            <span>
+            {{ inning }}回{{ halfInning % 2 === 0 ? '表' : '裏' }}
+            </span>
+            <span>攻撃：P{{ currentBatter }}</span>
+            <span>守備：P{{ currentSetter }}</span>
+        </div>
+
+        <div class="score-row">
+            <span>P1 : {{ player1Score }}</span>
+            <span>P2 : {{ player2Score }}</span>
+        </div>
+        <div>ランナー: 
+            <span :style="{ color: runners[1] ? '#f1c40f' : '#7f8c8d' }">1塁</span>
+            <span :style="{ color: runners[2] ? '#f1c40f' : '#7f8c8d' }">2塁</span>
+            <span :style="{ color: runners[3] ? '#f1c40f' : '#7f8c8d' }">3塁</span>
+        </div>
+        <div>
+            OUT :
+            <span :style="{ color: outCount >= 1 ? '#e74c3c' : '#7f8c8d' }">●</span>
+            <span :style="{ color: outCount >= 2 ? '#e74c3c' : '#7f8c8d' }">●</span>
+        </div>
+    </div>
+
+    <!-- メッセージ通知エリア -->
+    <div class="message-box">
+        <span v-html="message"></span>
+    </div>
+
+    <!-- 守備側の設定画面 -->
+    <div v-if="phase === 'set'">
+
+        <h2>守備側 P{{ currentSetter }}</h2>
+
+        <p>ヒット位置を決めてください</p>
+
+        <button
+            @click="setHit(0)"
+            :disabled="myPlayerRef !== currentSetter"
+        >
+            1塁打
+        </button>
+        <button
+            @click="setHit(1)"
+            :disabled="myPlayerRef !== currentSetter"
+        >
+            2塁打
+        </button>
+        <button
+            @click="setHit(2)"
+            :disabled="myPlayerRef !== currentSetter"
+        >
+            3塁打
+        </button>
+        <button
+            @click="setHit(3)"
+            :disabled="myPlayerRef !== currentSetter"
+        >
+            本塁打
+        </button>
+
+    </div>
+
+    <!-- 野球盤フィールド -->
+    <div v-if="phase === 'guess'" class="field-container">
+        <div class="diamond-line"></div>
+        
+        <!-- 各ベースのカバーボタン -->
+        <button 
+            v-for="(base, index) in baseNames" 
+            :key="index"
+            :class="['base-btn', `base-${index}`, { 'has-runner': runners[index + 1], 'status-hit': opened[index] && bases[index], 'status-out': opened[index] && !bases[index] }]"
+            :disabled="
+                opened[index] ||
+                gameOver ||
+                myPlayerRef !== currentBatter
+            "
+            @click="selectBase(index)"
+        >
+            <!-- 表示内容の切り替え -->
+            <template v-if="opened[index]">
+                {{ bases[index] ? 'HIT!' : 'OUT' }}
+            </template>
+            <template v-else>
+                {{ base }}
+            </template>
+        </button>
+    </div>
+
+    <!-- 予告ホームラン・リセット等の操作 -->
+    <div
+        v-if="phase === 'guess' || gameOver"
+        style="display: flex; justify-content: center; gap: 10px;"
+    >
+        <button
+            v-if="phase === 'guess'"
+            class="btn-action"
+            :disabled="
+                usedNotice[currentBatter] ||
+                gameOver ||
+                outCount === 3 ||
+                myPlayerRef !== currentBatter
+            "
+            @click="announceNotice"
+        >
+            {{ usedNotice[currentBatter] ? '予告HR使用済' : '予告ホームラン！' }}
+        </button>
+
+        <button
+            v-if="gameOver"
+            class="btn-action"
+            @click="resetGame"
+        >
+            新しくゲームを始める
+        </button>
+    </div>
+</div>
+
+<script>
+    const peer = new Peer();
+    let conn = null;
+    let myPlayer = null;
+    let app = null;
+
+    const { createApp, ref } = Vue;
+
+    app = createApp({
+        setup() {
+            const baseNames = ['1塁', '2塁', '3塁', '本塁'];
+            
+            // ゲーム進行状態
+            const inning = ref(1);
+            const outCount = ref(0);
+            const gameOver = ref(false);
+            const halfInning = ref(0);
+            const message = ref('狙うベースのカバーをクリックしてください！');
+
+            // ランナーの状態 (1塁: runners[1], 2塁: runners[2], 3塁: runners[3])
+            const runners = ref({ 1: false, 2: false, 3: false });
+
+            // ピッチャー(CPU)の隠し場所と、バッターの開封ログ
+            const bases = ref([false, false, false, false]); // trueがヒットの場所
+            const opened = ref([false, false, false, false]); // 各ベースが開けられたか
+            
+            // 特殊ルール：予告ホームラン
+            const isNoticeMode = ref(false);
+            const usedNotice = ref({
+                1: false,
+                2: false
+            });
+
+            const currentBatter = ref(1);
+            const currentSetter = ref(2);
+
+            const myPlayerRef = ref(null);
+            window.setMyPlayer = (n) => {
+                myPlayerRef.value = n;
+            };
+
+            const player1Score = ref(0);
+            const player2Score = ref(0);
+
+            const phase = ref('set');
+            const hiddenHit = ref(null);
+
+            window.sendState = function() {
+
+                if (!conn) return;
+
+                conn.send({
+                    inning: inning.value,
+                    halfInning: halfInning.value,
+                    outCount: outCount.value,
+                    gameOver: gameOver.value,
+
+                    runners: runners.value,
+
+                    bases: bases.value,
+                    opened: opened.value,
+
+                    hiddenHit: hiddenHit.value,
+
+                    currentBatter: currentBatter.value,
+                    currentSetter: currentSetter.value,
+
+                    player1Score: player1Score.value,
+                    player2Score: player2Score.value,
+
+                    isNoticeMode: isNoticeMode.value,
+                    usedNotice: usedNotice.value,
+
+                    phase: phase.value,
+                    message: message.value
+                });
+            };
+
+            const setHit = (index) => {
+
+                bases.value = [false, false, false, false];
+                bases.value[index] = true;
+
+                hiddenHit.value = index;
+
+                opened.value = [false, false, false, false];
+
+                message.value =
+                    `P${currentBatter.value}が選択してください`;
+
+                phase.value = 'guess';
+                sendState();
+            };
+
+            // 次の打席へ（配置だけ初期化）
+            const nextAtBat = () => {
+
+                bases.value = [false, false, false, false];
+                opened.value = [false, false, false, false];
+
+                hiddenHit.value = null;
+
+                phase.value = 'set';
+
+                isNoticeMode.value = false;
+            };
+
+            // バッターがベースを選択したときの処理
+            const selectBase = (index) => {
+                if (gameOver.value) return;
+                opened.value[index] = true;
+
+                // --- 予告ホームランモードの処理 ---
+                if (isNoticeMode.value) {
+
+                    if (index === hiddenHit.value) {
+
+                        message.value =
+                        '<span style="color:red; font-size:18px;">予告ホームラン成功！</span>';
+
+                        advanceRunners(4);
+
+                        nextAtBat();
+                        sendState();
+
+                    } else {
+
+                        message.value =
+                        '予告ホームラン失敗…！1アウト。';
+
+                        outCount.value++;
+
+                        checkOutCount();
+
+                        if (outCount.value < 3) {
+                            nextAtBat();
+                        }
+                    }
+
+                    isNoticeMode.value = false;
+                    return;
+                }
+
+                // --- 通常モードの処理 ---
+                if (index === hiddenHit.value) {
+                    // ヒット！
+                    const hitsMap = ['1塁打', '2塁打', '3塁打', '本塁打'];
+                    message.value = `<span style="color:green;">ヒット！【 ${hitsMap[index]} 】です！</span>`;
+                    advanceRunners(index + 1); // 1~4の数値を渡す
+                    nextAtBat();
+                    sendState();
+                } else {
+                    // アウト！
+                    outCount.value++;
+                    message.value = `<span style="color:red;">アウト！</span> 残りのカバーから選んでください。`;
+                    checkOutCount();
+                }
+            };
+
+            // アウトカウントのチェンジ・ゲーム終了判定
+            const checkOutCount = () => {
+
+                if (outCount.value < 3) {
+                    return;
+                }
+
+                message.value = `<span style="color:red;">3アウトチェンジ！</span>`;
+
+                outCount.value = 0;
+
+                // 攻守交代
+                [currentBatter.value, currentSetter.value] = [
+                    currentSetter.value,
+                    currentBatter.value
+                ];
+
+                halfInning.value++;
+
+                runners.value = {
+                    1: false,
+                    2: false,
+                    3: false
+                };
+
+                // 裏終了時だけイニングを進める
+                if (halfInning.value % 2 === 0) {
+                    inning.value++;
+                }
+
+                // 3回裏終了で試合終了
+                if (halfInning.value >= 6) {
+
+                    let winner = '';
+
+                    if (player1Score.value > player2Score.value) {
+                        winner = 'P1の勝ち！';
+                    }
+                    else if (player2Score.value > player1Score.value) {
+                        winner = 'P2の勝ち！';
+                    }
+                    else {
+                        winner = '引き分け！';
+                    }
+
+                    gameOver.value = true;
+
+                    message.value = `
+                    試合終了！<br>
+                    P1 : ${player1Score.value}点<br>
+                    P2 : ${player2Score.value}点<br>
+                    ${winner}
+                    `;
+
+                    return;
+                }
+
+                nextAtBat();
+                sendState();
+
+            };
+
+            // 進塁処理ロジック（ヒット＆アウトの核心ルール）
+            const advanceRunners = (hitType) => {
+                let runsScored = 0;
+
+                if (outCount.value === 0) {
+                    // 【ノーアウト】：全員がhitType分だけ無条件に進塁
+                    for (let b = 3; b >= 1; b--) {
+                        if (runners.value[b]) {
+                            runners.value[b] = false;
+                            let nextBase = b + hitType;
+                            if (nextBase >= 4) {
+                                runsScored++;
+                            } else {
+                                runners.value[nextBase] = true;
+                            }
+                        }
+                    }
+                    // バッターの進塁
+                    if (hitType >= 4) {
+                        runsScored++;
+                    } else {
+                        runners.value[hitType] = true;
+                    }
+                } else {
+                    // 【1,2アウト】：「押し出し」のみ（詰まっている時だけ玉突きで進む）
+                    // 1塁打なら1回、2塁打なら2回「バッターが1塁に入る処理」を繰り返す
+                    for (let h = 1; h <= hitType; h++) {
+                        if (h === 1) {
+                            // 1回目の進塁：バッターが1塁へ進むことによる押し出し
+                            if (runners.value[1] && runners.value[2] && runners.value[3]) {
+                                runsScored++; // 満塁なら1点
+                            }
+                            if (runners.value[1] && runners.value[2]) {
+                                runners.value[3] = true;
+                            }
+                            if (runners.value[1]) {
+                                runners.value[2] = true;
+                            }
+                            runners.value[1] = true; // バッター（または押し出された走者）が1塁へ
+                        } else {
+                            // 2回目以降の進塁：2塁打以上の場合、後続が強制的に進むための押し出し
+                            // すでに1塁は埋まっているので、純粋に全員が1つずつ押し出される
+                            if (runners.value[3]) {
+                                runsScored++;
+                                runners.value[3] = false;
+                            }
+                            if (runners.value[2]) {
+                                runners.value[3] = true;
+                                runners.value[2] = false;
+                            }
+                            if (runners.value[1]) {
+                                runners.value[2] = true;
+                                runners.value[1] = false;
+                            }
+                            runners.value[1] = true; // 後続が詰めているため1塁は埋まったまま
+                        }
+                    }
+
+                    // 最後に、打者自身が最終的にとどまるべきベース以外をクリアする処理
+                    // 例：2塁打(hitType=2)の場合、1塁にランナーがいなければ1塁は空く
+                    if (hitType === 2 && !runners.value[1]) {
+                        runners.value[1] = false;
+                    }
+                    if (hitType === 3) {
+                        runners.value[1] = false;
+                        runners.value[2] = false;
+                    }
+                    if (hitType >= 4) {
+                        runners.value[1] = false;
+                        runners.value[2] = false;
+                        runners.value[3] = false;
+                    }
+                }
+
+                // 得点の加算とメッセージ表示
+                if (currentBatter.value === 1) {
+                    player1Score.value += runsScored;
+                } else {
+                    player2Score.value += runsScored;
+                }
+                if (runsScored > 0) {
+                    message.value += ` <span style="color:orange;">${runsScored}点 獲得！</span>`;
+                }
+
+                sendState();
+            };
+
+            // 予告ホームラン宣言
+            const announceNotice = () => {
+                if (myPlayerRef.value !== currentBatter.value) return;
+
+                isNoticeMode.value = true;
+                usedNotice.value[currentBatter.value] = true;
+                message.value ='「予告ホームラン！」を宣言しました。ヒット位置を当てればホームラン！';
+            };
+
+            // ゲーム完全リセット
+            const resetGame = () => {
+                inning.value = 1;
+                halfInning.value = 0;
+
+                outCount.value = 0;
+                gameOver.value = false;
+
+                usedNotice.value = {
+                    1: false,
+                    2: false
+                };
+                isNoticeMode.value = false;
+
+                player1Score.value = 0;
+                player2Score.value = 0;
+
+                currentBatter.value = 1;
+                currentSetter.value = 2;
+
+                runners.value = {
+                    1: false,
+                    2: false,
+                    3: false
+                };
+
+                hiddenHit.value = null;
+                phase.value = 'set';
+
+                message.value = '新しいゲームが始まりました！';
+            };
+
+            const syncState = (data) => {
+
+                inning.value = data.inning;
+                halfInning.value = data.halfInning;
+
+                outCount.value = data.outCount;
+                gameOver.value = data.gameOver;
+
+                runners.value = data.runners;
+
+                bases.value = data.bases;
+                opened.value = data.opened;
+
+                hiddenHit.value = data.hiddenHit;
+
+                currentBatter.value = data.currentBatter;
+                currentSetter.value = data.currentSetter;
+
+                player1Score.value = data.player1Score;
+                player2Score.value = data.player2Score;
+
+                isNoticeMode.value = data.isNoticeMode;
+                usedNotice.value = data.usedNotice;
+
+                phase.value = data.phase;
+                message.value = data.message;
+            };
+
+            return {
+                baseNames,
+                inning,
+                halfInning,
+                outCount,
+                gameOver,
+                message,
+                runners,
+                bases,
+                opened,
+                usedNotice,
+
+                hiddenHit,
+                isNoticeMode,
+
+                selectBase,
+                announceNotice,
+                resetGame,
+
+                currentBatter,
+                currentSetter,
+
+                player1Score,
+                player2Score,
+
+                phase,
+
+                setHit,
+                syncState,
+
+                myPlayerRef
+            };
+        }
+    }).mount('#app');
+
+    function setupConnection() {
+
+        conn.on('open', () => {
+
+            document.getElementById('status').textContent =
+                `接続完了 P${myPlayer}`;
+
+            sendState();
+        });
+
+        conn.on('data', data => {
+            app.syncState(data);
+        });
+
+    }
+
+    peer.on('open', id => {
+
+        const params =
+            new URLSearchParams(location.search);
+
+        const hostId = params.get('id');
+
+        if (hostId) {
+
+            myPlayer = 2;
+            setMyPlayer(2);
+
+            conn = peer.connect(hostId);
+
+            setupConnection();
+
+        } else {
+
+            myPlayer = 1;
+            setMyPlayer(1);
+
+            document.getElementById('share').innerHTML =
+                `このURLを共有<br>${location.href}?id=${id}`;
+        }
+    });
+
+    peer.on('connection', c => {
+        conn = c;
+        setupConnection();
+    });
+</script>
+
+</body>
+</html>
