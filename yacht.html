@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>ヨット</title>
+
+    <!-- ✅ PeerJS CDN -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --accent-color: #e74c3c;
+            --p1-color: #3498db;
+            --p2-color: #2ecc71;
+            --bg-color: #ecf0f1;
+        }
+
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: #333;
+        }
+
+        h1 { color: var(--primary-color); margin-bottom: 5px; }
+
+        /* 通信・接続情報エリア */
+        #connection-panel {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            text-align: center;
+            margin-bottom: 20px;
+            max-width: 500px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        #status { font-weight: bold; font-size: 1.1rem; }
+        #share { margin-top: 8px; font-size: 0.9rem; color: #7f8c8d; word-break: break-all; }
+
+        /* ダイスエリア */
+        #dice-container {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            height: 95px;
+            align-items: center;
+        }
+
+        .dice-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .dice {
+            font-size: 3.5rem;
+            width: 70px;
+            height: 70px;
+            line-height: 70px;
+            text-align: center;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.15);
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.2s ease;
+        }
+
+        /* キープされたダイス */
+        .dice.kept {
+            background: #f1c40f;
+            transform: translateY(-8px);
+            box-shadow: 0 8px 12px rgba(0,0,0,0.2);
+        }
+
+        /* 🎲 投げる動作のアニメーション */
+        @keyframes rollAnimation {
+            0% { transform: scale(0.6) rotate(0deg); }
+            30% { transform: scale(1.3) rotate(180deg); }
+            70% { transform: scale(0.8) rotate(360deg); }
+            100% { transform: scale(1) rotate(540deg); }
+        }
+
+        .rolling { animation: rollAnimation 0.5s ease-out; }
+
+        .keep-label { font-size: 0.8rem; font-weight: bold; color: #7f8c8d; height: 15px; }
+
+        /* 操作ボタン */
+        #roll-btn {
+            padding: 12px 30px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.2s;
+            margin-bottom: 20px;
+        }
+
+        #roll-btn:disabled { background-color: #bdc3c7; cursor: not-allowed; }
+
+        /* スコアボード */
+        table {
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 500px;
+        }
+
+        th, td { padding: 10px 15px; text-align: center; border-bottom: 1px solid #eee; }
+        th { background-color: var(--primary-color); color: white; }
+
+        .p1-col { color: var(--p1-color); font-weight: bold; width: 25%; }
+        .p2-col { color: var(--p2-color); font-weight: bold; width: 25%; }
+        .score-name { font-weight: bold; color: #34495e; text-align: left; width: 50%; }
+
+        /* 入力可能なマス */
+        .selectable { cursor: pointer; background-color: #fff9e6; font-weight: normal; color: #bdc3c7; }
+        .selectable:hover { background-color: #ffeaa7; color: #2c3e50; font-weight: bold; }
+
+        .bonus-row, .total-row { background-color: #f8f9fa; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h1>ヨット</h1>
+    
+    <!-- 接続情報・状態管理パネル -->
+    <div id="connection-panel">
+        <div id="status">接続準備中...</div>
+        <div id="share"></div>
+    </div>
+
+    <!-- ダイスエリア -->
+    <div id="dice-container">
+        <div class="dice-wrapper">
+            <div class="dice" id="dice-0" onclick="toggleKeep(0)">⚀</div>
+            <span class="keep-label" id="label-0"></span>
+        </div>
+        <div class="dice-wrapper">
+            <div class="dice" id="dice-1" onclick="toggleKeep(1)">⚀</div>
+            <span class="keep-label" id="label-1"></span>
+        </div>
+        <div class="dice-wrapper">
+            <div class="dice" id="dice-2" onclick="toggleKeep(2)">⚀</div>
+            <span class="keep-label" id="label-2"></span>
+        </div>
+        <div class="dice-wrapper">
+            <div class="dice" id="dice-3" onclick="toggleKeep(3)">⚀</div>
+            <span class="keep-label" id="label-3"></span>
+        </div>
+        <div class="dice-wrapper">
+            <div class="dice" id="dice-4" onclick="toggleKeep(4)">⚀</div>
+            <span class="keep-label" id="label-4"></span>
+        </div>
+    </div>
+
+    <button id="roll-btn" onclick="rollDice()" disabled>相手の接続を待っています</button>
+
+    <!-- スコアボード -->
+    <table>
+        <thead>
+            <tr>
+                <th>役名 / セクション</th>
+                <th>P1</th>
+                <th>P2</th>
+            </tr>
+        </thead>
+        <tbody id="score-table-body">
+            <!-- JavaScriptで動的に生成 -->
+        </tbody>
+    </table>
+
+<script>
+    const peer = new Peer();
+    let conn = null;
+    let myNumber = null; // 1 = Player1(Host), 2 = Player2(Guest)
+
+    // ゲーム状態
+    let currentPlayer = 1;
+    let rollCount = 0;
+    const maxRolls = 3;
+    let turnCount = 0;
+
+    let dice = [
+        { value: 1, kept: false },
+        { value: 1, kept: false },
+        { value: 1, kept: false },
+        { value: 1, kept: false },
+        { value: 1, kept: false }
+    ];
+
+    const diceIcons = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+
+    const scores = {
+        1: { aces: null, twos: null, threes: null, fours: null, fives: null, sixes: null, choice: null, fourOfAKind: null, fullHouse: null, sStraight: null, bStraight: null, yacht: null },
+        2: { aces: null, twos: null, threes: null, fours: null, fives: null, sixes: null, choice: null, fourOfAKind: null, fullHouse: null, sStraight: null, bStraight: null, yacht: null }
+    };
+
+    const categories = [
+        { id: 'aces', name: 'エース (1の目)' },
+        { id: 'twos', name: 'デュース (2の目)' },
+        { id: 'threes', name: 'トリーズ (3の目)' },
+        { id: 'fours', name: 'フォーズ (4の目)' },
+        { id: 'fives', name: 'ファイブズ (5の目)' },
+        { id: 'sixes', name: 'シックス (6の目)' },
+        { id: 'bonus', name: '小計ボーナス (+35)', isCalc: true },
+        { id: 'choice', name: 'チョイス (自由枠)' },
+        { id: 'fourOfAKind', name: 'フォーダイス (4個同目)' },
+        { id: 'fullHouse', name: 'フルハウス' },
+        { id: 'sStraight', name: 'S. ストレート (4連続)' },
+        { id: 'bStraight', name: 'B. ストレート (5連続)' },
+        { id: 'yacht', name: 'ヨット (5個同目)' },
+        { id: 'total', name: '合計点数', isCalc: true }
+    ];
+
+    // PeerJS ネットワーク処理
+    peer.on('open', id => {
+        const urlParams = new URLSearchParams(location.search);
+        const hostId = urlParams.get('id');
+
+        if (hostId) {
+            myNumber = 2; // 参加者
+            conn = peer.connect(hostId);
+            setupConnection();
+        } else {
+            myNumber = 1; // ホスト
+            document.getElementById('status').textContent = "対戦相手の接続を待っています...";
+            document.getElementById('share').innerHTML = `このURLを対戦相手に共有してください:<br><strong>${location.href}?id=${id}</strong>`;
+        }
+    });
+
+    peer.on('connection', c => {
+        if (myNumber === 1) {
+            conn = c;
+            setupConnection();
+        }
+    });
+
+    function setupConnection() {
+        conn.on('open', () => {
+            document.getElementById('share').style.display = 'none';
+            initGame();
+        });
+
+        // 相手からのデータを受信
+        conn.on('data', data => {
+            if (data.type === 'sync') {
+                // スコアやターン状態の同期
+                Object.assign(scores[1], data.scores[1]);
+                Object.assign(scores[2], data.scores[2]);
+                currentPlayer = data.currentPlayer;
+                rollCount = data.rollCount;
+                turnCount = data.turnCount;
+                dice = data.dice;
+                
+                // ダイスの画面表示を復元
+                dice.forEach((d, i) => {
+                    const diceEl = document.getElementById(`dice-${i}`);
+                    const labelEl = document.getElementById(`label-${i}`);
+                    diceEl.textContent = diceIcons[d.value - 1];
+                    if (d.kept) {
+                        diceEl.classList.add('kept');
+                        labelEl.textContent = 'KEEP';
+                    } else {
+                        diceEl.classList.remove('kept');
+                        labelEl.textContent = '';
+                    }
+                });
+                
+                renderTable();
+                updateStatus();
+            } else if (data.type === 'roll_start') {
+                // 相手がダイスを振ったアニメーション演出の同期
+                animateOpponentRoll(data.targetIndices, data.finalDice);
+            }
+        });
+    }
+
+    function initGame() {
+        renderTable();
+        updateStatus();
+    }
+
+    // データの送信（同期用共通化関数）
+    function sendSyncData() {
+        if (conn && conn.open) {
+            conn.send({
+                type: 'sync',
+                scores: scores,
+                currentPlayer: currentPlayer,
+                rollCount: rollCount,
+                turnCount: turnCount,
+                dice: dice
+            });
+        }
+    }
+
+    // ステータス表示・ボタン制御
+    function updateStatus() {
+        const statusEl = document.getElementById('status');
+        const rollBtn = document.getElementById('roll-btn');
+
+        if (turnCount >= 24) {
+            const p1Total = calcTotal(1);
+            const p2Total = calcTotal(2);
+            let winnerText = `ゲーム終了！ [P1: ${p1Total}点] vs [P2: ${p2Total}点] ➡ `;
+            if (p1Total > p2Total) winnerText += "Player 1 の勝ち！";
+            else if (p2Total > p1Total) winnerText += "Player 2 の勝ち！";
+            else winnerText += "引き分け！";
+            statusEl.textContent = winnerText;
+            rollBtn.disabled = true;
+            rollBtn.textContent = "対戦終了";
+            return;
+        }
+
+        const isMyTurn = (currentPlayer === myNumber);
+        const nameStr = `Player ${currentPlayer}` + (currentPlayer === myNumber ? " (あなた)" : " (相手)");
+        statusEl.textContent = `${nameStr} の番です (残り振り直し: ${maxRolls - rollCount}回)`;
+
+        if (isMyTurn) {
+            rollBtn.disabled = (rollCount >= maxRolls);
+            rollBtn.textContent = rollCount >= maxRolls ? "スコアシートの役を選択してください" : "サイコロを振る";
+        } else {
+            rollBtn.disabled = true;
+            rollBtn.textContent = "相手の操作を待っています...";
+        }
+    }
+
+    // 自分側のダイスを振る処理
+    function rollDice() {
+        if (currentPlayer !== myNumber || rollCount >= maxRolls) return;
+
+        const rollBtn = document.getElementById('roll-btn');
+        rollBtn.disabled = true;
+        rollCount++;
+
+        // 振る対象のサイコロのインデックスを抽出
+        const targetIndices = [];
+        dice.forEach((d, i) => { if (!d.kept) targetIndices.push(i); });
+
+        // 今回の最終結果の目を先に決定しておく
+        targetIndices.forEach(i => {
+            dice[i].value = Math.floor(Math.random() * 6) + 1;
+        });
+
+        // 相手側にも「今からダイスが転がる」アニメーション通知を送る
+        if (conn && conn.open) {
+            conn.send({
+                type: 'roll_start',
+                targetIndices: targetIndices,
+                finalDice: dice
+            });
+        }
+
+        // ローカルでのローリングアニメーション開始
+        executeRollAnimation(targetIndices, () => {
+            rollBtn.disabled = (rollCount >= maxRolls);
+            renderTable();
+            updateStatus();
+            sendSyncData(); // 最終結果を相手に同期
+        });
+    }
+
+    // 相手がサイコロを振った時のアニメーションを強制同期
+    function animateOpponentRoll(targetIndices, finalDiceFromHost) {
+        dice = finalDiceFromHost; // 結果を上書き
+        executeRollAnimation(targetIndices, () => {
+            renderTable();
+            updateStatus();
+        });
+    }
+
+    // アニメーション実行の共通関数
+    function executeRollAnimation(targetIndices, callback) {
+        targetIndices.forEach(index => {
+            const diceEl = document.getElementById(`dice-${index}`);
+            diceEl.classList.add('rolling');
+
+            const interval = setInterval(() => {
+                const rand = Math.floor(Math.random() * 6);
+                diceEl.textContent = diceIcons[rand];
+            }, 50);
+
+            setTimeout(() => {
+                clearInterval(interval);
+                diceEl.classList.remove('rolling');
+                diceEl.textContent = diceIcons[dice[index].value - 1];
+            }, 500);
+        });
+
+        // 最長500msのシャッフルが終わった後にコールバック
+        setTimeout(callback, 550);
+    }
+
+    // キープのトグル処理
+    function toggleKeep(index) {
+        // 自分のターンでない、または一度も振っていない、または3回振り終わった後はキープ不可
+        if (currentPlayer !== myNumber || rollCount === 0 || rollCount >= maxRolls) return;
+
+        dice[index].kept = !dice[index].kept;
+        const diceEl = document.getElementById(`dice-${index}`);
+        const labelEl = document.getElementById(`label-${index}`);
+
+        if (dice[index].kept) {
+            diceEl.classList.add('kept');
+            labelEl.textContent = 'KEEP';
+        } else {
+            diceEl.classList.remove('kept');
+            labelEl.textContent = '';
+        }
+        sendSyncData(); // キープ状態の変化を即座に相手に同期
+    }
+
+    // スコアの確定処理
+    function selectScore(catId) {
+        if (currentPlayer !== myNumber || rollCount === 0) return;
+        if (scores[currentPlayer][catId] !== null) return;
+
+        const currentDiceValues = dice.map(d => d.value);
+        scores[currentPlayer][catId] = scoreCalculators[catId](currentDiceValues);
+
+        // ターン終了および交代処理
+        turnCount++;
+        currentPlayer = currentPlayer === 1 ? 2 : 1;
+        rollCount = 0;
+
+        // ダイス状態をクリア
+        dice.forEach((d, index) => {
+            d.kept = false;
+            const diceEl = document.getElementById(`dice-${index}`);
+            const labelEl = document.getElementById(`label-${index}`);
+            diceEl.classList.remove('kept');
+            labelEl.textContent = '';
+            diceEl.textContent = '⚀';
+        });
+
+        renderTable();
+        updateStatus();
+        sendSyncData(); // ターン終了後の盤面を相手へ同期
+    }
+
+    // スコア計算ロジック
+    const scoreCalculators = {
+        aces: (d) => d.filter(x => x === 1).length * 1,
+        twos: (d) => d.filter(x => x === 2).length * 2,
+        threes: (d) => d.filter(x => x === 3).length * 3,
+        fours: (d) => d.filter(x => x === 4).length * 4,
+        fives: (d) => d.filter(x => x === 5).length * 5,
+        sixes: (d) => d.filter(x => x === 6).length * 6,
+        choice: (d) => d.reduce((a, b) => a + b, 0),
+        fourOfAKind: (d) => {
+            const counts = getCounts(d);
+            return Object.values(counts).some(c => c >= 4) ? d.reduce((a, b) => a + b, 0) : 0;
+        },
+        fullHouse: (d) => {
+            const counts = Object.values(getCounts(d));
+            return (counts.includes(3) && counts.includes(2)) || counts.includes(5) ? d.reduce((a, b) => a + b, 0) : 0;
+        },
+        sStraight: (d) => {
+            const unique = [...new Set(d)].sort().join('');
+            return /1234|2345|3456/.test(unique) ? 15 : 0;
+        },
+        bStraight: (d) => {
+            const unique = [...new Set(d)].sort().join('');
+            return unique === '12345' || unique === '23456' ? 30 : 0;
+        },
+        yacht: (d) => new Set(d).size === 1 ? 50 : 0
+    };
+
+    function getCounts(d) {
+        const counts = {};
+        d.forEach(x => counts[x] = (counts[x] || 0) + 1);
+        return counts;
+    }
+
+    function calcUpperBonus(player) {
+        const upperKeys = ['aces', 'twos', 'threes', 'fours', 'fives', 'sixes'];
+        const sum = upperKeys.reduce((acc, key) => acc + (scores[player][key] || 0), 0);
+        return sum >= 63 ? 35 : 0;
+    }
+
+    function calcTotal(player) {
+        let total = calcUpperBonus(player);
+        for (let key in scores[player]) {
+            if (key !== 'bonus' && key !== 'total') {
+                total += (scores[player][key] || 0);
+            }
+        }
+        return total;
+    }
+
+    // テーブルのレンダリング
+    function renderTable() {
+        const tbody = document.getElementById('score-table-body');
+        tbody.innerHTML = '';
+
+        categories.forEach(cat => {
+            const tr = document.createElement('tr');
+            if (cat.id === 'bonus' || cat.id === 'total') tr.className = `${cat.id}-row`;
+
+            const tdName = document.createElement('td');
+            tdName.className = 'score-name';
+            tdName.textContent = cat.name;
+            tr.appendChild(tdName);
+
+            [1, 2].forEach(p => {
+                const tdScore = document.createElement('td');
+                tdScore.className = p === 1 ? 'p1-col' : 'p2-col';
+
+                if (cat.id === 'bonus') {
+                    tdScore.textContent = calcUpperBonus(p);
+                } else if (cat.id === 'total') {
+                    tdScore.textContent = calcTotal(p);
+                } else {
+                    const score = scores[p][cat.id];
+                    if (score !== null) {
+                        tdScore.textContent = score;
+                    } else if (p === currentPlayer && p === myNumber && rollCount > 0) {
+                        // 自分のターンかつダイスを1回以上振っているなら予測値を薄く表示
+                        tdScore.className += ' selectable';
+                        tdScore.textContent = scoreCalculators[cat.id](dice.map(d => d.value));
+                        tdScore.onclick = () => selectScore(cat.id);
+                    } else {
+                        tdScore.textContent = '-';
+                    }
+                }
+                tr.appendChild(tdScore);
+            });
+            tbody.appendChild(tr);
+        });
+    }
+
+</script>
+</body>
+</html>
