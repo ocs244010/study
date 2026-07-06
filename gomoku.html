@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>五目並べ</title>
+
+    <!-- ✅ PeerJS 正しいCDN -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+    <style>
+        /* 全体の背景をダークグレーにして目に優しく */
+        body { display: flex; flex-direction: column; align-items: center; background-color: #1e222b; color: #e3e6eb; font-family: sans-serif; }
+        
+        /* 盤面の枠：落ち着いた深みのある新カヤ風の木目色 */
+        #board { display: grid; grid-template-columns: repeat(15, 40px); grid-template-rows: repeat(15, 40px); gap: 1px; background-color: #b37d4e; border: 4px solid #8a5a32; box-shadow: 0 8px 16px rgba(0,0,0,0.5); }
+        
+        /* マス目：本物の碁盤に近い、明るく品のある木目色 */
+        .cell { width: 40px; height: 40px; background-color: #e6b47b; display: flex; justify-content: center; align-items: center; cursor: pointer; position: relative; }
+        
+        /* 碁盤の格子線：細くシャープな黒線 */
+        .cell::before { content: ""; position: absolute; width: 100%; height: 1px; background-color: #5c3e21; top: 50%; left: 0; }
+        .cell::after { content: ""; position: absolute; width: 1px; height: 100%; background-color: #5c3e21; left: 50%; top: 0; }
+        
+        /* 碁石の共通スタイル：わずかな立体感（影）を付与 */
+        .stone { width: 34px; height: 34px; border-radius: 50%; display: none; z-index: 1; box-shadow: 0 3px 6px rgba(0,0,0,0.4); }
+        
+        /* 漆黒の石（わずかに光沢を感じる黒） */
+        .black { display: block; background-color: #1a1a1a; border: 1px solid #000; }
+        
+        /* 純白の石（高級感のある白） */
+        .white { display: block; background-color: #ffffff; border: 1px solid #dcdcdc; }
+
+        #share { margin-bottom: 15px; font-size: 14px; text-align: center; color: #3498db; }
+
+        /* 再戦ボタンのスタイル */
+        #reset-btn { display: none; margin-top: 15px; padding: 10px 20px; font-size: 16px; font-weight: bold; background-color: #2ecc71; color: white; border: none; border-radius: 50px; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
+        #reset-btn:hover { background-color: #27ae60; }
+    </style>
+</head>
+<body>
+
+<h1>五目並べ</h1>
+<div id="status">接続準備中...</div>
+<div id="share"></div>
+<p id="turn-info"></p>
+<div id="board"></div>
+<!-- ✅ 再戦ボタンを配置 -->
+<button id="reset-btn" onclick="requestReset()">もう一度対戦する</button>
+
+<script>
+const peer = new Peer();
+let conn = null;
+let myColor = null;
+let board = Array(15).fill().map(()=>Array(15).fill(null));
+let turn = 'black'; 
+let gameOver = false;
+
+peer.on('open', id=>{
+    const urlParams = new URLSearchParams(location.search);
+    const hostId = urlParams.get('id');
+
+    if(hostId){
+        myColor='white';
+        conn = peer.connect(hostId);
+        setup();
+    }else{
+        myColor='black';
+        document.getElementById('share').innerHTML =
+            `このURLをコピーして相手に送信してください:<br><input type="text" value="${location.href}?id=${id}" readonly style="width:300px; text-align:center; margin-top:5px;">`;
+    }
+});
+
+peer.on('connection', c=>{
+    conn=c;
+    setup();
+});
+
+function setup(){
+    conn.on('open', ()=>{
+        document.getElementById('status').textContent =
+            `対戦開始（あなたは: ${myColor === 'black' ? '黒 / 先手' : '白 / 後手'}）`;
+        draw();
+    });
+
+    conn.on('data', data=>{
+        // ✅ 相手からリセット信号が届いたらゲームを初期化
+        if(data.type === 'reset') {
+            initGame(data.newColor);
+            return;
+        }
+
+        board=data.board;
+        turn=data.turn;
+        gameOver=data.gameOver;
+        draw();
+        if(gameOver) {
+            alert(data.winner === 'black' ? '黒の勝ちです！' : '白の勝ちです！');
+        }
+    });
+}
+
+function draw(){
+    const el=document.getElementById('board');
+    el.innerHTML='';
+
+    const turnInfo = document.getElementById('turn-info');
+    const resetBtn = document.getElementById('reset-btn');
+
+    if(gameOver) {
+        turnInfo.textContent = "対局終了";
+        resetBtn.style.display = 'block'; // ✅ ゲーム終了時にボタンを表示
+    } else {
+        turnInfo.textContent = `手番: ${turn === 'black' ? '黒' : '白'} ${turn === myColor ? '（あなたの番）' : '（相手の番）'}`;
+        resetBtn.style.display = 'none';
+    }
+
+    for(let r=0;r<15;r++){
+        for(let c=0;c<15;c++){
+            const cell=document.createElement('div');
+            cell.className='cell';
+
+            if(board[r][c]){
+                const s=document.createElement('div');
+                s.className='stone '+board[r][c];
+                cell.appendChild(s);
+            }else if(turn===myColor && !gameOver){
+                cell.onclick=()=>{
+                    board[r][c]=turn;
+                    
+                    if(checkWin(r, c, turn)){
+                        gameOver = true;
+                        draw();
+                        conn && conn.send({board, turn, gameOver, winner: turn});
+                        alert(turn === 'black' ? '黒の勝ちです！' : '白の勝ちです！');
+                        return;
+                    }
+
+                    turn = turn==='black'?'white':'black';
+                    draw();
+                    conn && conn.send({board, turn, gameOver});
+                };
+            }
+
+            el.appendChild(cell);
+        }
+    }
+}
+
+// ✅ 再戦を要求する処理（色を入れ替える）
+function requestReset() {
+    const nextColor = myColor === 'black' ? 'white' : 'black';
+    const opponentColor = myColor; // 相手は今の自分の色（逆になる）
+    
+    // 相手にリセットを通知
+    conn && conn.send({ type: 'reset', newColor: opponentColor });
+    // 自分の画面も初期化
+    initGame(nextColor);
+}
+
+// ✅ ゲーム状態を初期化する共通関数
+function initGame(newColor) {
+    board = Array(15).fill().map(()=>Array(15).fill(null));
+    turn = 'black'; // 常に黒からスタート
+    gameOver = false;
+    myColor = newColor;
+    
+    document.getElementById('status').textContent =
+        `対戦開始（あなたは: ${myColor === 'black' ? '黒 / 先手' : '白 / 後手'}）`;
+    
+    draw();
+}
+
+// 4つの方向（横・縦・右下斜め・左下斜め）の判定
+function checkWin(r, c, color){
+    const dirs = [[0,1], [1,0], [1,1], [1,-1]]; 
+    
+    for(let [dr, dc] of dirs) {
+        let count = 1;
+        
+        // 正の方向
+        let x = r + dr, y = c + dc;
+        while(x>=0 && x<15 && y>=0 && y<15 && board[x][y] === color) {
+            count++;
+            x += dr; y += dc;
+        }
+        
+        // 負の方向
+        x = r - dr; y = c - dc;
+        while(x>=0 && x<15 && y>=0 && y<15 && board[x][y] === color) {
+            count++;
+            x -= dr; y -= dc;
+        }
+        
+        if(count >= 5) return true;
+    }
+    return false;
+}
+</script>
+
+</body>
+</html>
